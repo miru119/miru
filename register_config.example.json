@@ -1,0 +1,22 @@
+{
+  "login_url": "https://example.com/login",
+  "register_url": "https://example.com/class/register",
+  "username": "your_id",
+  "password": "your_pw",
+  "login_payload": {
+    "username": "your_id",
+    "password": "your_pw"
+  },
+  "register_payload": {
+    "course_id": "A1001",
+    "agree_terms": "Y"
+  },
+  "headers": {
+    "User-Agent": "Mozilla/5.0",
+    "Referer": "https://example.com/class/detail/A1001"
+  },
+  "open_time": "2026-02-19T09:00:00+09:00",
+  "before_open_poll_ms": 10,
+  "after_open_attempts": 8,
+  "timeout_seconds": 2.0
+}
