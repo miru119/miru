@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Iterable
 from urllib.parse import parse_qs, quote_plus, urlparse
+from urllib.request import urlopen
 
 DB_PATH = Path("weekly_participant_stats.db")
 YEARS = (2024, 2025, 2026)
@@ -114,27 +115,50 @@ def create_weekly_form_csv(week_start: str, counselors: list[str], output: Path)
 
 def import_weekly_form_csv(conn: sqlite3.Connection, csv_file: Path) -> int:
     with csv_file.open("r", newline="", encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-        if not reader.fieldnames:
-            raise ValueError("CSV 헤더를 읽을 수 없습니다.")
+        return import_weekly_form_reader(conn, csv.DictReader(f))
 
-        required = set(CSV_HEADERS)
-        missing = required.difference(set(reader.fieldnames))
-        if missing:
-            raise ValueError(f"CSV 헤더 누락: {sorted(missing)}")
 
-        saved = 0
-        for row in reader:
-            values = {field: int(row[label]) for field, label in METRIC_FIELDS}
-            report = WeeklyReport(
-                counselor=row["상담사"],
-                year=int(row["연도"]),
-                week_start=parse_week_start(row["주차시작일"]),
-                values=values,
-            )
-            upsert_weekly_report(conn, report)
-            saved += 1
+def import_weekly_form_reader(conn: sqlite3.Connection, reader: csv.DictReader) -> int:
+    if not reader.fieldnames:
+        raise ValueError("CSV 헤더를 읽을 수 없습니다.")
+
+    required = set(CSV_HEADERS)
+    missing = required.difference(set(reader.fieldnames))
+    if missing:
+        raise ValueError(f"CSV 헤더 누락: {sorted(missing)}")
+
+    saved = 0
+    for row in reader:
+        values = {field: int(row[label]) for field, label in METRIC_FIELDS}
+        report = WeeklyReport(
+            counselor=row["상담사"],
+            year=int(row["연도"]),
+            week_start=parse_week_start(row["주차시작일"]),
+            values=values,
+        )
+        upsert_weekly_report(conn, report)
+        saved += 1
     return saved
+
+
+def normalize_google_sheet_csv_url(url: str) -> str:
+    parsed = urlparse(url)
+    if "docs.google.com" not in parsed.netloc:
+        return url
+    if "/export" in parsed.path and "format=csv" in parsed.query:
+        return url
+    if "/edit" in parsed.path:
+        base = url.split("/edit")[0]
+        return f"{base}/export?format=csv"
+    return url
+
+
+def import_weekly_form_csv_url(conn: sqlite3.Connection, csv_url: str) -> int:
+    normalized_url = normalize_google_sheet_csv_url(csv_url)
+    with urlopen(normalized_url) as response:
+        content = response.read().decode("utf-8-sig")
+    reader = csv.DictReader(content.splitlines())
+    return import_weekly_form_reader(conn, reader)
 
 
 def fetch_weekly_reports(conn: sqlite3.Connection, week_start: str | None = None) -> Iterable[sqlite3.Row]:
@@ -273,6 +297,9 @@ def build_parser() -> argparse.ArgumentParser:
     submit_form = subparsers.add_parser("submit-form", help="작성한 주간보고 CSV를 DB로 저장")
     submit_form.add_argument("--file", required=True, help="입력 CSV 경로")
 
+    submit_sheet = subparsers.add_parser("submit-sheet", help="구글시트 CSV 링크를 읽어 DB로 저장")
+    submit_sheet.add_argument("--csv-url", required=True, help="구글시트 CSV 공개 링크")
+
     view = subparsers.add_parser("view", help="저장된 주간보고 조회")
     view.add_argument("--week-start", help="YYYY-MM-DD (선택)")
 
@@ -294,6 +321,10 @@ def main() -> None:
         with get_connection() as conn:
             count = import_weekly_form_csv(conn, Path(args.file))
         print(f"저장 완료: {count}건")
+    elif args.command == "submit-sheet":
+        with get_connection() as conn:
+            count = import_weekly_form_csv_url(conn, args.csv_url)
+        print(f"구글시트 저장 완료: {count}건")
     elif args.command == "view":
         with get_connection() as conn:
             rows = fetch_weekly_reports(conn, args.week_start)
